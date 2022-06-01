@@ -80,16 +80,6 @@ enum Data {
 	Vec(Vec<u16>),
 }
 
-impl Drop for Data {
-	fn drop(&mut self) {
-		if let Self::Ptr(p) = self {
-			unsafe {
-				GlobalUnlock(*p as isize);
-			}
-		}
-	}
-}
-
 unsafe fn notepad_handle() -> io::Result<(HANDLE, u32)> {
 	match find_notepad()? {
 		Some(x) => Ok(x),
