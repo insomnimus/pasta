@@ -5,7 +5,6 @@ use std::{
 		Error,
 		Read,
 	},
-	mem,
 	os::windows::{
 		ffi::OsStringExt,
 		io::{
@@ -33,7 +32,6 @@ use windows::{
 			CloseHandle,
 			BOOL,
 			HANDLE,
-			HINSTANCE,
 			HWND,
 			LPARAM,
 			WPARAM,
@@ -50,12 +48,7 @@ use windows::{
 				GlobalLock,
 				GlobalUnlock,
 			},
-			ProcessStatus::{
-				K32EnumProcessModulesEx,
-				K32EnumProcesses,
-				K32GetModuleFileNameExW,
-				LIST_MODULES_ALL,
-			},
+			ProcessStatus::K32GetModuleFileNameExW,
 			SystemServices::CF_UNICODETEXT,
 			Threading::{
 				OpenProcess,
@@ -67,9 +60,13 @@ use windows::{
 		UI::WindowsAndMessaging::{
 			EnumWindows,
 			FindWindowExW,
+			GetTopWindow,
+			GetWindow,
 			GetWindowThreadProcessId,
+			IsWindowVisible,
 			SendMessageW,
 			SetForegroundWindow,
+			GW_HWNDNEXT,
 			WM_SETTEXT,
 		},
 	},
@@ -80,25 +77,14 @@ enum Data {
 	Vec(Vec<u16>),
 }
 
-unsafe fn notepad_handle() -> io::Result<(HANDLE, u32)> {
-	match find_notepad()? {
-		Some(x) => Ok(x),
-		None => {
-			let child = Command::new("notepad.exe").spawn()?;
-			let pid = child.id();
-			Ok((HANDLE(child.into_raw_handle() as isize), pid))
-		}
-	}
-}
-
 unsafe fn get_hwnd(pid: u32) -> Option<HWND> {
-	static NOTEPAD: AtomicIsize = AtomicIsize::new(0);
+	static TARGET: AtomicIsize = AtomicIsize::new(0);
 
 	unsafe extern "system" fn callback(hwnd: HWND, pid: LPARAM) -> BOOL {
 		let mut out = 0_u32;
 		GetWindowThreadProcessId(hwnd, &mut out as *mut u32);
 		if out == pid.0 as u32 {
-			NOTEPAD.store(hwnd.0, Ordering::Relaxed);
+			TARGET.store(hwnd.0, Ordering::Relaxed);
 			false.into()
 		} else {
 			true.into()
@@ -106,9 +92,9 @@ unsafe fn get_hwnd(pid: u32) -> Option<HWND> {
 	}
 
 	EnumWindows(Some(callback), LPARAM(pid as isize));
-	let notepad = NOTEPAD.load(Ordering::Relaxed);
-	if notepad != 0 {
-		Some(HWND(notepad))
+	let hwnd = TARGET.load(Ordering::Relaxed);
+	if hwnd != 0 {
+		Some(HWND(hwnd))
 	} else {
 		None
 	}
@@ -164,21 +150,15 @@ fn get_text_data() -> io::Result<Data> {
 	}
 }
 
-unsafe fn find_notepad() -> io::Result<Option<(HANDLE, u32)>> {
-	let mut pids = vec![0_u32; 1024];
-	let len = pids.len();
-	let mut n_bytes = 0_u32;
-	let res = K32EnumProcesses(pids.as_mut_ptr(), len as u32 * 4, &mut n_bytes as *mut _);
-
-	if res.0 == 0 {
-		return Err(Error::last_os_error());
-	}
-
-	pids.truncate(n_bytes as usize / 4);
-
-	for &pid in &pids {
+unsafe fn find_notepad() -> Option<(HWND, HANDLE)> {
+	unsafe fn inner(hwnd: HWND) -> Option<HANDLE> {
+		if !IsWindowVisible(hwnd).as_bool() {
+			return None;
+		}
+		let mut pid = 0_u32;
+		GetWindowThreadProcessId(hwnd, &mut pid as *mut u32);
 		if pid == 0 {
-			continue;
+			return None;
 		}
 		let handle = match OpenProcess(
 			PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
@@ -186,57 +166,62 @@ unsafe fn find_notepad() -> io::Result<Option<(HANDLE, u32)>> {
 			pid,
 		) {
 			Ok(x) if !x.is_invalid() => x,
-			_ => continue,
+			_ => return None,
 		};
 
-		let mut mods = vec![HINSTANCE(0); 1024];
-		let size = mods.len() * mem::size_of::<HINSTANCE>();
-		let mut n_bytes = 0_u32;
-		let res = K32EnumProcessModulesEx(
-			handle,
-			mods.as_ptr() as *mut _,
-			size as _,
-			&mut n_bytes as *mut u32,
-			LIST_MODULES_ALL,
-		);
-		if !res.as_bool() {
-			return Err(Error::last_os_error());
-		}
-		mods.truncate(n_bytes as usize / mem::size_of::<HINSTANCE>());
-		if mods.is_empty() {
-			continue;
-		}
-
-		let mut buf = vec![0_u16; 1024];
-		let res = K32GetModuleFileNameExW(handle, mods[0], &mut buf);
-		if res == 0 {
-			return Err(Error::last_os_error());
-		}
+		let mut buf = vec![0_u16; 512];
+		let res = K32GetModuleFileNameExW(handle, None, &mut buf);
 		buf.truncate(res as usize);
-		let buf = buf;
-		let path = OsString::from_wide(&buf);
-		let path = Path::new(&path);
+		let buf = OsString::from_wide(&buf);
+		let path = Path::new(&buf);
 		if path
 			.file_name()
-			.map_or(false, |s| s.eq_ignore_ascii_case("notepad.exe"))
+			.map_or(false, |p| p.eq_ignore_ascii_case("notepad.exe"))
 		{
-			return Ok(Some((handle, pid)));
+			Some(handle)
+		} else {
+			None
 		}
-		CloseHandle(handle);
 	}
 
-	Ok(None)
+	let mut cur = GetTopWindow(None);
+
+	while cur.0 != 0 {
+		if let Some(handle) = inner(cur) {
+			return Some((cur, handle));
+		}
+		cur = GetWindow(cur, GW_HWNDNEXT);
+	}
+
+	None
+}
+
+unsafe fn notepad_handle() -> Result<(HWND, HANDLE)> {
+	match find_notepad() {
+		Some(x) => Ok(x),
+		None => {
+			let child = Command::new("notepad.exe").spawn()?;
+			let pid = child.id();
+			let handle = HANDLE(child.into_raw_handle() as isize);
+			let code = WaitForInputIdle(handle, 2500);
+			ensure!(
+				code == 0,
+				"failed waiting for notepad window: code = {code}"
+			);
+			let hwnd = get_hwnd(pid).ok_or_else(|| anyhow!("could not locate a window handle"))?;
+			Ok((hwnd, handle))
+		}
+	}
 }
 
 fn main() -> Result<()> {
 	unsafe {
-		let (handle, pid) = notepad_handle()?;
+		let (hwnd, handle) = notepad_handle()?;
 		let code = WaitForInputIdle(handle, 2500);
 		ensure!(
 			code == 0,
 			"failed waiting for notepad window: code = {code}"
 		);
-		let hwnd = get_hwnd(pid).ok_or_else(|| anyhow!("could not locate a notepad window"))?;
 
 		ensure!(
 			SetForegroundWindow(hwnd).as_bool(),
