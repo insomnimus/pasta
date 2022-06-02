@@ -246,13 +246,14 @@ fn main() -> Result<()> {
 		let data = get_text_data()?;
 		send_text(hwnd, &data)?;
 
-		let res = match data {
-			Data::Ptr(p) => GlobalUnlock(*p as isize),
-			Data::Vec(_) => CloseClipboard(),
-		};
+		if let Data::Ptr(p) = data {
+			if !GlobalUnlock(p as isize).as_bool() {
+				return Err(Error::last_os_error().into());
+			}
 
-		if !res.as_bool() {
-			return Err(Error::last_os_error().into());
+			if !CloseClipboard().as_bool() {
+				return Err(Error::last_os_error().into());
+			}
 		}
 
 		CloseHandle(handle);
