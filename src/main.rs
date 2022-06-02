@@ -229,7 +229,7 @@ unsafe fn find_notepad() -> io::Result<Option<(HANDLE, u32)>> {
 }
 
 fn main() -> Result<()> {
-	unsafe fn run() -> Result<()> {
+	unsafe {
 		let (handle, pid) = notepad_handle()?;
 		let code = WaitForInputIdle(handle, 2500);
 		ensure!(
@@ -259,6 +259,4 @@ fn main() -> Result<()> {
 		CloseHandle(handle);
 		Ok(())
 	}
-
-	unsafe { run() }
 }
