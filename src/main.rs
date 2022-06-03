@@ -216,6 +216,7 @@ unsafe fn notepad_handle() -> Result<(HWND, HANDLE)> {
 
 fn main() -> Result<()> {
 	unsafe {
+		let data = get_text_data()?;
 		let (hwnd, handle) = notepad_handle()?;
 		let code = WaitForInputIdle(handle, 2500);
 		ensure!(
@@ -228,7 +229,6 @@ fn main() -> Result<()> {
 			"failed to focus on notepad"
 		);
 
-		let data = get_text_data()?;
 		send_text(hwnd, &data)?;
 
 		if let Data::Ptr(p) = data {
