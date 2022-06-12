@@ -1,3 +1,5 @@
+#![warn(clippy::borrow_as_ptr)]
+
 use std::{
 	ffi::OsString,
 	io::{
@@ -80,7 +82,7 @@ unsafe fn get_hwnd(pid: u32) -> Option<HWND> {
 
 	unsafe extern "system" fn callback(hwnd: HWND, param: LPARAM) -> BOOL {
 		let mut out = 0_u32;
-		GetWindowThreadProcessId(hwnd, &mut out as *mut u32);
+		GetWindowThreadProcessId(hwnd, addr_of_mut!(out));
 		let mut target = param.0 as *mut Target;
 		if out == (*target).1 {
 			(*target).0 = hwnd;
@@ -155,7 +157,7 @@ unsafe fn find_notepad() -> Option<(HWND, HANDLE)> {
 			return None;
 		}
 		let mut pid = 0_u32;
-		GetWindowThreadProcessId(hwnd, &mut pid as *mut u32);
+		GetWindowThreadProcessId(hwnd, addr_of_mut!(pid));
 		if pid == 0 {
 			return None;
 		}
