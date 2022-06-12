@@ -14,10 +14,7 @@ use std::{
 	},
 	path::Path,
 	process::Command,
-	sync::atomic::{
-		AtomicIsize,
-		Ordering,
-	},
+	ptr::addr_of_mut,
 };
 
 use anyhow::{
@@ -78,23 +75,25 @@ enum Data {
 }
 
 unsafe fn get_hwnd(pid: u32) -> Option<HWND> {
-	static TARGET: AtomicIsize = AtomicIsize::new(0);
+	type Target = (HWND, u32);
+	let mut target: Target = (HWND(0), pid);
 
-	unsafe extern "system" fn callback(hwnd: HWND, pid: LPARAM) -> BOOL {
+	unsafe extern "system" fn callback(hwnd: HWND, param: LPARAM) -> BOOL {
 		let mut out = 0_u32;
 		GetWindowThreadProcessId(hwnd, &mut out as *mut u32);
-		if out == pid.0 as u32 {
-			TARGET.store(hwnd.0, Ordering::Relaxed);
+		let mut target = param.0 as *mut Target;
+		if out == (*target).1 {
+			(*target).0 = hwnd;
 			false.into()
 		} else {
 			true.into()
 		}
 	}
 
-	EnumWindows(Some(callback), LPARAM(pid as isize));
-	let hwnd = TARGET.load(Ordering::Relaxed);
-	if hwnd != 0 {
-		Some(HWND(hwnd))
+	EnumWindows(Some(callback), LPARAM(addr_of_mut!(target) as isize));
+
+	if target.0 .0 != 0 {
+		Some(target.0)
 	} else {
 		None
 	}
