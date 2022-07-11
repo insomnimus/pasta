@@ -1,3 +1,6 @@
+# Note
+> This project will probably get replaced by the more feature complete assembly version of it: [pasta-asm](https://github.com/insomnimus/pasta-asm)
+
 # Pasta
 Pipe text to notepad!
 
@@ -7,7 +10,7 @@ The code tries to use as many Win32 functions as possible (It could be more, I'm
 So, it only works on Windows.
 
 ## Usage
-```sh
+```powershell
 # Pipe to it
 echo "Hello, notepad!" | pasta
 # Or, call it bare to use the clipboard contents
